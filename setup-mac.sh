@@ -1,0 +1,812 @@
+#!/bin/bash
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# ── Colors & Symbols ──────────────────────────────────────────────
+BOLD='\033[1m'
+DIM='\033[2m'
+CYAN='\033[36m'
+GREEN='\033[32m'
+YELLOW='\033[33m'
+RED='\033[31m'
+MAGENTA='\033[35m'
+RESET='\033[0m'
+CHECK="${GREEN}◉${RESET}"
+UNCHECK="${DIM}○${RESET}"
+ARROW="${CYAN}▸${RESET}"
+BLANK=" "
+PASS="${GREEN}✓${RESET}"
+FAIL="${RED}✗${RESET}"
+
+# ── Flags ─────────────────────────────────────────────────────────
+OVERWRITE=false
+ALL=false
+for arg in "$@"; do
+  case "$arg" in
+    --overwrite) OVERWRITE=true ;;
+    --all)       ALL=true ;;
+  esac
+done
+
+# ── Backup helper ─────────────────────────────────────────────────
+BACKUP_DIR="$HOME/.setup-backup/$(date +%Y%m%d-%H%M%S)"
+backup_file() {
+  local file="$1"
+  if [ -f "$file" ]; then
+    mkdir -p "$BACKUP_DIR"
+    cp "$file" "$BACKUP_DIR/$(basename "$file")"
+    echo -e "  ${DIM}Backed up $file${RESET}"
+  fi
+}
+
+# ── Module definitions ────────────────────────────────────────────
+# Sections are visually grouped with headers (empty name = section header)
+MODULES=(
+  ""
+  "Xcode CLT"
+  "Homebrew"
+  ""
+  "CLI tools"
+  "Dev apps"
+  "Office apps"
+  "Other apps"
+  "Java & Maven (AEM)"
+  ""
+  "Rosetta & Node 14 (AEM)"
+  "Node.js LTS"
+  "npm global packages"
+  "Bun"
+  "Factory CLI"
+  ""
+  "Zsh config"
+  "Starship config"
+  "Tmux config"
+  "Hammerspoon config"
+  "iTerm2 preferences"
+  "Claude Code settings"
+  ""
+  "Spotlight & Raycast"
+  "macOS defaults"
+  "Screenshots config"
+  "Maintenance jobs"
+)
+
+DESCRIPTIONS=(
+  "─── Prerequisites ───────────────────────────"
+  "Install Xcode Command Line Tools"
+  "Install Homebrew package manager"
+  "─── Packages & Apps ─────────────────────────"
+  "gh, starship, tmux, nvm, wireguard, etc."
+  "Claude Code, Codex, Cursor, Docker, iTerm2, Postman"
+  "Excel, Outlook, PowerPoint, Teams, Word"
+  "1Password, Chrome, Hammerspoon, Raycast, Tailscale"
+  "OpenJDK 11, Maven 3.6.3"
+  "─── Runtimes ────────────────────────────────"
+  "Rosetta 2 + Node 14.21.3 x86_64 for AEM"
+  "Install Node.js LTS via nvm"
+  "pnpm, pi-coding-agent"
+  "Install Bun runtime"
+  "Install Factory CLI"
+  "─── Dotfiles & Config ──────────────────────"
+  "Write ~/.zshrc with aliases & plugins"
+  "Write ~/.config/starship.toml"
+  "Write ~/.tmux.conf"
+  "Write ~/.hammerspoon/init.lua"
+  "Import iTerm2 plist"
+  "Write ~/.claude/settings.json"
+  "─── System ─────────────────────────────────"
+  "Disable Spotlight, configure Raycast"
+  "Dock, keyboard, Finder, wallpaper, dark mode"
+  "Screenshot folder & settings"
+  "Daily cleanup LaunchAgents"
+)
+
+NUM_MODULES=${#MODULES[@]}
+
+# All selected by default (headers are never selected)
+SELECTED=()
+IS_HEADER=()
+for ((i=0; i<NUM_MODULES; i++)); do
+  if [ -z "${MODULES[$i]}" ]; then
+    SELECTED+=("false")
+    IS_HEADER+=("true")
+  else
+    SELECTED+=("true")
+    IS_HEADER+=("false")
+  fi
+done
+
+# ── Interactive picker ────────────────────────────────────────────
+# Start cursor on first non-header
+CURSOR=1
+
+draw_menu() {
+  if [ "$1" = "redraw" ]; then
+    printf '\033[%dA' "$((NUM_MODULES + 5))"
+  fi
+
+  echo -e ""
+  echo -e "  ${BOLD}${CYAN}↑↓${RESET} navigate  ${BOLD}${CYAN}space${RESET} toggle  ${BOLD}${CYAN}a${RESET} all/none  ${BOLD}${CYAN}enter${RESET} run"
+  echo -e ""
+
+  for ((i=0; i<NUM_MODULES; i++)); do
+    if [ "${IS_HEADER[$i]}" = "true" ]; then
+      printf "       ${DIM}${DESCRIPTIONS[$i]}${RESET}\n"
+      continue
+    fi
+
+    local cursor_char="$BLANK"
+    local check_char="$UNCHECK"
+    local name="${MODULES[$i]}"
+    local desc="${DESCRIPTIONS[$i]}"
+
+    [ "$i" -eq "$CURSOR" ] && cursor_char="$ARROW"
+    [ "${SELECTED[$i]}" = "true" ] && check_char="$CHECK"
+
+    if [ "$i" -eq "$CURSOR" ]; then
+      printf "  %b %b  ${BOLD}%-26s${RESET} ${DIM}%s${RESET}\n" "$cursor_char" "$check_char" "$name" "$desc"
+    else
+      printf "  %b %b  %-26s ${DIM}%s${RESET}\n" "$cursor_char" "$check_char" "$name" "$desc"
+    fi
+  done
+
+  local count=0
+  local total=0
+  for ((i=0; i<NUM_MODULES; i++)); do
+    [ "${IS_HEADER[$i]}" = "true" ] && continue
+    ((total++))
+    [ "${SELECTED[$i]}" = "true" ] && ((count++))
+  done
+  echo -e ""
+  echo -e "  ${DIM}${count}/${total} selected${RESET}"
+}
+
+move_cursor() {
+  local dir="$1"
+  local next=$CURSOR
+  while true; do
+    ((next += dir))
+    if [ "$next" -lt 0 ] || [ "$next" -ge "$NUM_MODULES" ]; then
+      return  # hit boundary, don't move
+    fi
+    if [ "${IS_HEADER[$next]}" != "true" ]; then
+      CURSOR=$next
+      return
+    fi
+  done
+}
+
+run_picker() {
+  printf '\033[?25l'
+  trap 'printf "\033[?25h"' EXIT
+
+  draw_menu "first"
+
+  while true; do
+    IFS= read -rsn1 key
+
+    case "$key" in
+      $'\x1b')
+        read -rsn2 seq
+        case "$seq" in
+          '[A') move_cursor -1 ;;
+          '[B') move_cursor 1 ;;
+        esac
+        ;;
+      ' ')
+        if [ "${SELECTED[$CURSOR]}" = "true" ]; then
+          SELECTED[$CURSOR]="false"
+        else
+          SELECTED[$CURSOR]="true"
+        fi
+        ;;
+      'a'|'A')
+        local any_selected=false
+        for ((i=0; i<NUM_MODULES; i++)); do
+          [ "${IS_HEADER[$i]}" = "true" ] && continue
+          [ "${SELECTED[$i]}" = "true" ] && any_selected=true && break
+        done
+        local new_val="true"
+        $any_selected && new_val="false"
+        for ((i=0; i<NUM_MODULES; i++)); do
+          [ "${IS_HEADER[$i]}" = "true" ] && continue
+          SELECTED[$i]="$new_val"
+        done
+        ;;
+      '')
+        break
+        ;;
+    esac
+
+    draw_menu "redraw"
+  done
+
+  printf '\033[?25h'
+  echo ""
+}
+
+# ── Header ────────────────────────────────────────────────────────
+clear
+echo -e ""
+echo -e "  ${BOLD}${MAGENTA}┌───────────────────────────────┐${RESET}"
+echo -e "  ${BOLD}${MAGENTA}│${RESET}  ${BOLD}Mac Dev Environment Setup${RESET}  ${BOLD}${MAGENTA}│${RESET}"
+echo -e "  ${BOLD}${MAGENTA}└───────────────────────────────┘${RESET}"
+
+if $OVERWRITE; then
+  echo -e "  ${YELLOW}--overwrite: configs will be backed up and replaced${RESET}"
+fi
+
+if ! $ALL; then
+  run_picker
+fi
+
+# ── Count selected ────────────────────────────────────────────────
+TOTAL=0
+for ((i=0; i<NUM_MODULES; i++)); do
+  [ "${IS_HEADER[$i]}" = "true" ] && continue
+  [ "${SELECTED[$i]}" = "true" ] && ((TOTAL++))
+done
+
+if [ "$TOTAL" -eq 0 ]; then
+  echo -e "  ${DIM}Nothing selected. Exiting.${RESET}"
+  exit 0
+fi
+
+# ── Run helpers ───────────────────────────────────────────────────
+is_selected() {
+  local name="$1"
+  for ((i=0; i<NUM_MODULES; i++)); do
+    if [ "${MODULES[$i]}" = "$name" ]; then
+      [ "${SELECTED[$i]}" = "true" ] && return 0 || return 1
+    fi
+  done
+  return 1
+}
+
+# Pre-authenticate sudo so it doesn't interrupt module output
+NEEDS_SUDO=false
+for name in "Java & Maven (AEM)" "Spotlight & Raycast"; do
+  is_selected "$name" && NEEDS_SUDO=true && break
+done
+if $NEEDS_SUDO; then
+  echo -e "  ${DIM}Some modules need admin access.${RESET}"
+  sudo -v
+  # Keep sudo alive in the background
+  while true; do sudo -n true; sleep 50; done 2>/dev/null &
+  SUDO_PID=$!
+  trap 'kill $SUDO_PID 2>/dev/null; printf "\033[?25h"' EXIT
+fi
+
+echo ""
+echo -e "  ${BOLD}Running ${TOTAL} modules...${RESET}"
+echo ""
+
+CURRENT_MODULE_NAME=""
+STREAM_LINES=0
+LOG_BUFFER=()
+SPIN_IDX=0
+SPIN_CHARS='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+
+start_module() {
+  CURRENT_MODULE_NAME="$1"
+  STREAM_LINES=0
+  LOG_BUFFER=()
+  SPIN_IDX=0
+  printf "  ${CYAN}⠋${RESET} ${BOLD}%s${RESET}\n" "$CURRENT_MODULE_NAME"
+}
+
+# Erase current stream lines + header, then redraw header + last 3 log lines
+_redraw() {
+  # Erase everything (stream lines + header)
+  local total=$((STREAM_LINES + 1))
+  for ((n=0; n<total; n++)); do
+    printf '\033[1A\033[2K'
+  done
+
+  # Advance spinner
+  SPIN_IDX=$((SPIN_IDX + 1))
+  local ch="${SPIN_CHARS:$((SPIN_IDX % ${#SPIN_CHARS})):1}"
+  printf "  ${CYAN}%s${RESET} ${BOLD}%s${RESET}\n" "$ch" "$CURRENT_MODULE_NAME"
+
+  # Print last 3 from buffer
+  local buf_len=${#LOG_BUFFER[@]}
+  local start=$((buf_len > 3 ? buf_len - 3 : 0))
+  STREAM_LINES=0
+  local cols
+  cols=$(tput cols 2>/dev/null || echo 80)
+  local max=$((cols - 6))
+  for ((n=start; n<buf_len; n++)); do
+    local text="${LOG_BUFFER[$n]}"
+    if [ ${#text} -gt $max ]; then
+      text="${text:0:$((max - 1))}…"
+    fi
+    printf "    ${DIM}%s${RESET}\n" "$text"
+    STREAM_LINES=$((STREAM_LINES + 1))
+  done
+}
+
+log() {
+  local text="$1"
+  # Strip control chars, skip blank
+  text="${text//$'\r'/}"
+  local clean="${text//[$'\t ']/}"
+  [[ -z "$clean" ]] && return
+
+  LOG_BUFFER+=("$text")
+  _redraw
+}
+
+# Collapse everything into a single result line
+_collapse() {
+  local symbol="$1"
+  local total=$((STREAM_LINES + 1))
+  for ((n=0; n<total; n++)); do
+    printf '\033[1A\033[2K'
+  done
+  echo -e "  ${symbol} ${BOLD}${CURRENT_MODULE_NAME}${RESET}"
+  STREAM_LINES=0
+  LOG_BUFFER=()
+}
+
+finish_ok()   { _collapse "${PASS}"; }
+finish_fail() { _collapse "${FAIL}"; }
+
+# Run brew bundle with streaming output
+brew_bundle() {
+  local file="$1"
+  while IFS= read -r line; do
+    log "$line"
+  done < <(brew bundle --file="$SCRIPT_DIR/brew/$file" --verbose 2>&1)
+}
+
+# ── Module implementations ────────────────────────────────────────
+
+# --- Prerequisites ---
+
+if is_selected "Xcode CLT"; then
+  start_module "Xcode CLT"
+  if ! xcode-select -p &>/dev/null; then
+    xcode-select --install
+    until xcode-select -p &>/dev/null; do sleep 5; done
+  fi
+  finish_ok
+fi
+
+if is_selected "Homebrew"; then
+  start_module "Homebrew"
+  if ! command -v brew &>/dev/null; then
+    while IFS= read -r line; do log "$line"; done < <(/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" 2>&1)
+    eval "$(/opt/homebrew/bin/brew shellenv)"
+  fi
+  finish_ok
+fi
+
+# --- Packages & Apps ---
+
+if is_selected "CLI tools"; then
+  start_module "CLI tools"
+  brew_bundle "cli-tools.Brewfile"
+  finish_ok
+fi
+
+if is_selected "Dev apps"; then
+  start_module "Dev apps"
+  brew_bundle "dev-apps.Brewfile"
+  finish_ok
+fi
+
+if is_selected "Office apps"; then
+  start_module "Office apps"
+  brew_bundle "office-apps.Brewfile"
+  finish_ok
+fi
+
+if is_selected "Other apps"; then
+  start_module "Other apps"
+  brew_bundle "other-apps.Brewfile"
+  finish_ok
+fi
+
+if is_selected "Java & Maven (AEM)"; then
+  start_module "Java & Maven (AEM)"
+  brew_bundle "java-aem.Brewfile"
+  sudo ln -sfn /opt/homebrew/opt/openjdk@11/libexec/openjdk.jdk /Library/Java/JavaVirtualMachines/openjdk-11.jdk 2>/dev/null || true
+  # Maven 3.6.3 (newer versions break AEM's AutoValue/bundle-plugin)
+  if [ ! -d ~/.local/maven/apache-maven-3.6.3 ]; then
+    log "Downloading Maven 3.6.3..."
+    mkdir -p ~/.local/maven ~/.local/bin
+    curl -sL https://archive.apache.org/dist/maven/maven-3/3.6.3/binaries/apache-maven-3.6.3-bin.tar.gz | tar xz -C ~/.local/maven/
+  fi
+  ln -sfn ~/.local/maven/apache-maven-3.6.3/bin/mvn ~/.local/bin/mvn
+  finish_ok
+fi
+
+# --- Runtimes ---
+
+if is_selected "Rosetta & Node 14 (AEM)"; then
+  start_module "Rosetta & Node 14 (AEM)"
+  log "Installing Rosetta 2..."
+  softwareupdate --install-rosetta --agree-to-license &>/dev/null || true
+  export NVM_DIR="$HOME/.nvm"
+  [ -s "/opt/homebrew/opt/nvm/nvm.sh" ] && \. "/opt/homebrew/opt/nvm/nvm.sh"
+  while IFS= read -r line; do log "$line"; done < <(arch -x86_64 /bin/zsh -c "export NVM_DIR=\"$HOME/.nvm\" && source /opt/homebrew/opt/nvm/nvm.sh && nvm install 14.21.3" 2>&1)
+  nvm use default &>/dev/null || true
+  finish_ok
+fi
+
+if is_selected "Node.js LTS"; then
+  start_module "Node.js LTS"
+  export NVM_DIR="$HOME/.nvm"
+  [ -s "/opt/homebrew/opt/nvm/nvm.sh" ] && \. "/opt/homebrew/opt/nvm/nvm.sh"
+  while IFS= read -r line; do log "$line"; done < <(nvm install --lts 2>&1)
+  nvm alias default lts/* &>/dev/null
+  finish_ok
+fi
+
+if is_selected "npm global packages"; then
+  start_module "npm global packages"
+  log "Installing pnpm..."
+  while IFS= read -r line; do log "$line"; done < <(npm install -g pnpm 2>&1)
+  log "Installing pi-coding-agent..."
+  while IFS= read -r line; do log "$line"; done < <(npm install -g @mariozechner/pi-coding-agent 2>&1)
+  finish_ok
+fi
+
+if is_selected "Bun"; then
+  start_module "Bun"
+  if ! command -v bun &>/dev/null; then
+    while IFS= read -r line; do log "$line"; done < <(curl -fsSL https://bun.sh/install | bash 2>&1)
+  fi
+  finish_ok
+fi
+
+if is_selected "Factory CLI"; then
+  start_module "Factory CLI"
+  while IFS= read -r line; do log "$line"; done < <(curl -fsSL https://app.factory.ai/cli | sh 2>&1)
+  finish_ok
+fi
+
+# --- Dotfiles & Config ---
+
+if is_selected "Zsh config"; then
+  start_module "Zsh config"
+  if [ -f ~/.zshrc ] && ! $OVERWRITE; then
+    log "Exists, skipping (use --overwrite)"
+  else
+    backup_file ~/.zshrc
+    cat > ~/.zshrc << 'ZSHRC'
+# nvm
+export NVM_DIR="$HOME/.nvm"
+[ -s "/opt/homebrew/opt/nvm/nvm.sh" ] && \. "/opt/homebrew/opt/nvm/nvm.sh"
+[ -s "/opt/homebrew/opt/nvm/etc/bash_completion.d/nvm" ] && \. "/opt/homebrew/opt/nvm/etc/bash_completion.d/nvm"
+
+# java
+export JAVA_HOME="/opt/homebrew/opt/openjdk@11/libexec/openjdk.jdk/Contents/Home"
+export PATH="$JAVA_HOME/bin:$PATH"
+
+# aliases
+alias cc='claude --dangerously-skip-permissions'
+
+# bun
+export BUN_INSTALL="$HOME/.bun"
+export PATH="$BUN_INSTALL/bin:$PATH"
+
+# factory cli
+export PATH="$HOME/.local/bin:$PATH"
+
+alias b="bun"
+alias c="clear"
+alias g="git"
+alias gs="git status"
+alias snapai="npx snapai"
+
+# history substring search (type partial command + up/down arrow)
+bindkey '^[[A' history-beginning-search-backward
+bindkey '^[[B' history-beginning-search-forward
+
+# zsh plugins
+source /opt/homebrew/share/zsh-autosuggestions/zsh-autosuggestions.zsh
+source /opt/homebrew/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
+
+# starship prompt
+eval "$(starship init zsh)"
+ZSHRC
+  fi
+  finish_ok
+fi
+
+if is_selected "Starship config"; then
+  start_module "Starship config"
+  if [ -f ~/.config/starship.toml ] && ! $OVERWRITE; then
+    log "Exists, skipping (use --overwrite)"
+  else
+    backup_file ~/.config/starship.toml
+    mkdir -p ~/.config
+    cat > ~/.config/starship.toml << 'STARSHIP'
+format = "🏕️ "
+
+[character]
+disabled = true
+STARSHIP
+  fi
+  finish_ok
+fi
+
+if is_selected "Tmux config"; then
+  start_module "Tmux config"
+  if [ -f ~/.tmux.conf ] && ! $OVERWRITE; then
+    log "Exists, skipping (use --overwrite)"
+  else
+    backup_file ~/.tmux.conf
+    cat > ~/.tmux.conf << 'TMUXCONF'
+set -g mouse on
+
+# Vim-style pane switching with Ctrl+hjkl
+bind -n C-h select-pane -L
+bind -n C-j select-pane -D
+bind -n C-k select-pane -U
+bind -n C-l select-pane -R
+
+# Copy to system clipboard
+set -g set-clipboard on
+bind -T copy-mode MouseDragEnd1Pane send -X copy-pipe-and-cancel "pbcopy"
+bind -T copy-mode-vi MouseDragEnd1Pane send -X copy-pipe-and-cancel "pbcopy"
+TMUXCONF
+  fi
+  finish_ok
+fi
+
+if is_selected "Hammerspoon config"; then
+  start_module "Hammerspoon config"
+  if [ -f ~/.hammerspoon/init.lua ] && ! $OVERWRITE; then
+    log "Exists, skipping (use --overwrite)"
+  else
+    backup_file ~/.hammerspoon/init.lua
+    mkdir -p ~/.hammerspoon
+    cat > ~/.hammerspoon/init.lua << 'HAMMERSPOON'
+require("hs.ipc")
+
+-- Option+Command+F: Maximize active window (not fullscreen)
+hs.hotkey.bind({"alt", "cmd"}, "F", function()
+  local win = hs.window.focusedWindow()
+  if win then
+    win:maximize()
+  end
+end)
+
+-- Option+Command+Left: Left half of screen, full height
+hs.hotkey.bind({"alt", "cmd"}, "Left", function()
+  local win = hs.window.focusedWindow()
+  if win then
+    local screen = win:screen():frame()
+    win:setFrame(hs.geometry.rect(screen.x, screen.y, screen.w / 2, screen.h))
+  end
+end)
+
+-- Option+Command+Right: Right half of screen, full height
+hs.hotkey.bind({"alt", "cmd"}, "Right", function()
+  local win = hs.window.focusedWindow()
+  if win then
+    local screen = win:screen():frame()
+    win:setFrame(hs.geometry.rect(screen.x + screen.w / 2, screen.y, screen.w / 2, screen.h))
+  end
+end)
+
+-- Option+Command+Up: Top half of screen, full width
+hs.hotkey.bind({"alt", "cmd"}, "Up", function()
+  local win = hs.window.focusedWindow()
+  if win then
+    local screen = win:screen():frame()
+    win:setFrame(hs.geometry.rect(screen.x, screen.y, screen.w, screen.h / 2))
+  end
+end)
+
+-- Option+Command+Down: Bottom half of screen, full width
+hs.hotkey.bind({"alt", "cmd"}, "Down", function()
+  local win = hs.window.focusedWindow()
+  if win then
+    local screen = win:screen():frame()
+    win:setFrame(hs.geometry.rect(screen.x, screen.y + screen.h / 2, screen.w, screen.h / 2))
+  end
+end)
+
+-- Ctrl+Option+Command+Arrow: Move window to monitor in that direction
+local function moveToScreen(direction)
+  local win = hs.window.focusedWindow()
+  if not win then return end
+  local current = win:screen()
+  local target = current[direction](current)
+  if target then
+    win:moveToScreen(target, true, true)
+  end
+end
+
+hs.hotkey.bind({"ctrl", "alt", "cmd"}, "Left", function() moveToScreen("toWest") end)
+hs.hotkey.bind({"ctrl", "alt", "cmd"}, "Right", function() moveToScreen("toEast") end)
+hs.hotkey.bind({"ctrl", "alt", "cmd"}, "Up", function() moveToScreen("toNorth") end)
+hs.hotkey.bind({"ctrl", "alt", "cmd"}, "Down", function() moveToScreen("toSouth") end)
+HAMMERSPOON
+  fi
+  finish_ok
+fi
+
+if is_selected "iTerm2 preferences"; then
+  start_module "iTerm2 preferences"
+  if [ -f ~/Library/Preferences/com.googlecode.iterm2.plist ] && ! $OVERWRITE; then
+    log "Exists, skipping (use --overwrite)"
+  elif [ -f "$SCRIPT_DIR/iterm2-profile.plist" ]; then
+    backup_file ~/Library/Preferences/com.googlecode.iterm2.plist
+    cp "$SCRIPT_DIR/iterm2-profile.plist" ~/Library/Preferences/com.googlecode.iterm2.plist
+    sed -i '' "s|/Users/mirzajoldic|$HOME|g" ~/Library/Preferences/com.googlecode.iterm2.plist
+    defaults read com.googlecode.iterm2 &>/dev/null
+  else
+    log "iterm2-profile.plist not found, skipping"
+  fi
+  finish_ok
+fi
+
+if is_selected "Claude Code settings"; then
+  start_module "Claude Code settings"
+  if [ -f ~/.claude/settings.json ] && ! $OVERWRITE; then
+    log "Exists, skipping (use --overwrite)"
+  else
+    backup_file ~/.claude/settings.json
+    mkdir -p ~/.claude
+    cat > ~/.claude/settings.json << CLAUDESETTINGS
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/rtk-rewrite.sh"
+          }
+        ]
+      }
+    ]
+  },
+  "skipDangerousModePermissionPrompt": true
+}
+CLAUDESETTINGS
+  fi
+  finish_ok
+fi
+
+# --- System ---
+
+if is_selected "Spotlight & Raycast"; then
+  start_module "Spotlight & Raycast"
+  sudo mdutil -a -i off >/dev/null 2>&1
+  defaults write com.apple.symbolichotkeys AppleSymbolicHotKeys -dict-add 64 '{ enabled = 0; value = { parameters = (32, 49, 1048576); type = standard; }; }'
+  defaults write com.raycast.macos raycastGlobalHotkey -string "Control-49"
+  finish_ok
+fi
+
+if is_selected "macOS defaults"; then
+  start_module "macOS defaults"
+  defaults write com.apple.dock autohide -bool true
+  defaults write com.apple.dock orientation -string "left"
+  defaults write -g InitialKeyRepeat -int 15
+  defaults write -g KeyRepeat -int 2
+  defaults write NSGlobalDomain AppleShowAllExtensions -bool true
+  killall Finder 2>/dev/null || true
+  defaults -currentHost write -g com.apple.keyboard.modifiermapping.0-0-0 -array \
+    '<dict><key>HIDKeyboardModifierMappingSrc</key><integer>30064771129</integer><key>HIDKeyboardModifierMappingDst</key><integer>30064771300</integer></dict>'
+  osascript -e 'tell application "System Events" to tell every desktop to set picture to "/System/Library/Desktop Pictures/Solid Colors/Black.png"' 2>/dev/null || true
+  defaults write com.apple.WindowManager EnableStandardClickToShowDesktop -bool false
+  defaults write com.apple.WindowManager StandardHideDesktopIcons -bool true
+  defaults write -g AppleInterfaceStyle -string "Dark"
+  killall Dock 2>/dev/null || true
+  finish_ok
+fi
+
+if is_selected "Screenshots config"; then
+  start_module "Screenshots config"
+  mkdir -p ~/Screenshots
+  defaults write com.apple.screencapture location ~/Screenshots
+  defaults write com.apple.screencapture show-thumbnail -bool false
+  killall SystemUIServer 2>/dev/null || true
+  finish_ok
+fi
+
+if is_selected "Maintenance jobs"; then
+  start_module "Maintenance jobs"
+  mkdir -p ~/Library/LaunchAgents ~/.local/scripts
+
+  cat > ~/.local/scripts/cleanup-screenshots.sh << 'SCRIPT'
+#!/bin/bash
+find ~/Screenshots -type f -delete 2>/dev/null
+echo "$(date): Screenshots cleared" >> ~/.daily-cleanup.log
+SCRIPT
+
+  cat > ~/.local/scripts/cleanup-dev-cache.sh << 'SCRIPT'
+#!/bin/bash
+export PATH="/opt/homebrew/bin:$HOME/.bun/bin:$HOME/.nvm/versions/node/$(ls ~/.nvm/versions/node/ | tail -1)/bin:$PATH"
+npm cache clean --force 2>/dev/null
+bun pm cache rm 2>/dev/null
+echo "$(date): Dev caches cleared" >> ~/.daily-cleanup.log
+SCRIPT
+
+  cat > ~/.local/scripts/cleanup-brew.sh << 'SCRIPT'
+#!/bin/bash
+/opt/homebrew/bin/brew cleanup --prune=7 2>/dev/null
+echo "$(date): Homebrew cleaned" >> ~/.daily-cleanup.log
+SCRIPT
+
+  cat > ~/.local/scripts/cleanup-logs.sh << 'SCRIPT'
+#!/bin/bash
+find ~/Library/Logs -type f -mtime +7 -delete 2>/dev/null
+echo "$(date): Old logs cleared" >> ~/.daily-cleanup.log
+SCRIPT
+
+  cat > ~/.local/scripts/cleanup-browsers.sh << 'SCRIPT'
+#!/bin/bash
+rm -rf ~/Library/Caches/Google/Chrome/Default/Cache/* 2>/dev/null
+rm -rf ~/Library/Caches/Google/Chrome/Default/Code\ Cache/* 2>/dev/null
+rm -rf ~/Library/Caches/com.apple.Safari/WebKitCache/* 2>/dev/null
+echo "$(date): Browser caches cleared" >> ~/.daily-cleanup.log
+SCRIPT
+
+  cat > ~/.local/scripts/cleanup-temp.sh << 'SCRIPT'
+#!/bin/bash
+find /tmp -maxdepth 1 -type f -mtime +7 -delete 2>/dev/null
+find ~/Library/Caches -type f -mtime +7 -delete 2>/dev/null
+echo "$(date): Temp/caches cleared" >> ~/.daily-cleanup.log
+SCRIPT
+
+  chmod +x ~/.local/scripts/cleanup-*.sh
+
+  create_cleanup_agent() {
+    local name="$1" hour="$2" minute="$3" script="$4"
+    local plist=~/Library/LaunchAgents/com.user.cleanup-${name}.plist
+    if [ -f "$plist" ] && ! $OVERWRITE; then
+      log "cleanup-${name} exists, skipping"
+      return
+    fi
+    launchctl unload "$plist" 2>/dev/null || true
+    cat > "$plist" << LAUNCHD
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.user.cleanup-${name}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>${script}</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>${hour}</integer>
+        <key>Minute</key>
+        <integer>${minute}</integer>
+    </dict>
+</dict>
+</plist>
+LAUNCHD
+    launchctl load "$plist"
+  }
+
+  create_cleanup_agent "screenshots"   3  0  "$HOME/.local/scripts/cleanup-screenshots.sh"
+  create_cleanup_agent "dev-cache"     8  0  "$HOME/.local/scripts/cleanup-dev-cache.sh"
+  create_cleanup_agent "brew"         12  0  "$HOME/.local/scripts/cleanup-brew.sh"
+  create_cleanup_agent "logs"         16  0  "$HOME/.local/scripts/cleanup-logs.sh"
+  create_cleanup_agent "browsers"     20  0  "$HOME/.local/scripts/cleanup-browsers.sh"
+  create_cleanup_agent "temp"         23  0  "$HOME/.local/scripts/cleanup-temp.sh"
+  finish_ok
+fi
+
+# ── Done ──────────────────────────────────────────────────────────
+echo ""
+echo -e "  ${BOLD}${GREEN}Setup complete!${RESET}"
+if [ -d "$BACKUP_DIR" ]; then
+  echo -e "  ${DIM}Backups: $BACKUP_DIR${RESET}"
+fi
+echo ""
+
+zsh -c 'source ~/.zshrc' 2>/dev/null || true
