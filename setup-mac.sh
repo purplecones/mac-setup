@@ -45,6 +45,8 @@ backup_file() {
 MODULES=(
   ""
   "Xcode CLT"
+  "Xcode"
+  "TestFlight"
   "Homebrew"
   ""
   "CLI tools"
@@ -65,6 +67,7 @@ MODULES=(
   "Hammerspoon config"
   "iTerm2 preferences"
   "Claude Code settings"
+  "Cursor config"
   ""
   "Spotlight & Raycast"
   "macOS defaults"
@@ -75,6 +78,8 @@ MODULES=(
 DESCRIPTIONS=(
   "─── Prerequisites ───────────────────────────"
   "Install Xcode Command Line Tools"
+  "Install full Xcode IDE from App Store"
+  "Install TestFlight from App Store"
   "Install Homebrew package manager"
   "─── Packages & Apps ─────────────────────────"
   "gh, starship, tmux, nvm, wireguard, etc."
@@ -95,6 +100,7 @@ DESCRIPTIONS=(
   "Write ~/.hammerspoon/init.lua"
   "Import iTerm2 plist"
   "Write ~/.claude/settings.json"
+  "Keybindings, settings, and extensions"
   "─── System ─────────────────────────────────"
   "Disable Spotlight, configure Raycast"
   "Dock, keyboard, Finder, wallpaper, dark mode"
@@ -266,7 +272,7 @@ is_selected() {
 
 # Pre-authenticate sudo so it doesn't interrupt module output
 NEEDS_SUDO=false
-for name in "Java & Maven (AEM)" "Spotlight & Raycast"; do
+for name in "Xcode" "Java & Maven (AEM)" "Spotlight & Raycast"; do
   is_selected "$name" && NEEDS_SUDO=true && break
 done
 if $NEEDS_SUDO; then
@@ -369,6 +375,44 @@ if is_selected "Xcode CLT"; then
   if ! xcode-select -p &>/dev/null; then
     xcode-select --install
     until xcode-select -p &>/dev/null; do sleep 5; done
+  fi
+  finish_ok
+fi
+
+if is_selected "Xcode"; then
+  start_module "Xcode"
+  if [ -d "/Applications/Xcode.app" ]; then
+    log "Already installed"
+  else
+    log "Installing Xcode from App Store (this may take a while)..."
+    if command -v mas &>/dev/null; then
+      while IFS= read -r line; do log "$line"; done < <(mas install 497799835 2>&1)
+    else
+      log "mas not found — install CLI tools first, then re-run"
+      finish_fail
+    fi
+  fi
+  if [ -d "/Applications/Xcode.app" ]; then
+    log "Accepting license..."
+    sudo xcodebuild -license accept 2>/dev/null || true
+    log "Setting Xcode as active developer directory..."
+    sudo xcode-select -s /Applications/Xcode.app/Contents/Developer 2>/dev/null || true
+  fi
+  finish_ok
+fi
+
+if is_selected "TestFlight"; then
+  start_module "TestFlight"
+  if mas list | grep -q "899247664"; then
+    log "Already installed"
+  else
+    log "Installing TestFlight from App Store..."
+    if command -v mas &>/dev/null; then
+      while IFS= read -r line; do log "$line"; done < <(mas install 899247664 2>&1)
+    else
+      log "mas not found — install CLI tools first, then re-run"
+      finish_fail
+    fi
   fi
   finish_ok
 fi
@@ -671,6 +715,86 @@ if is_selected "Claude Code settings"; then
   "skipDangerousModePermissionPrompt": true
 }
 CLAUDESETTINGS
+  fi
+  finish_ok
+fi
+
+if is_selected "Cursor config"; then
+  start_module "Cursor config"
+  CURSOR_USER_DIR="$HOME/Library/Application Support/Cursor/User"
+  if [ -f "$CURSOR_USER_DIR/keybindings.json" ] && ! $OVERWRITE; then
+    log "Keybindings exist, skipping (use --overwrite)"
+  else
+    backup_file "$CURSOR_USER_DIR/keybindings.json"
+    mkdir -p "$CURSOR_USER_DIR"
+    cat > "$CURSOR_USER_DIR/keybindings.json" << 'CURSORKEYS'
+[
+  {
+    "key": "ctrl+p",
+    "command": "workbench.action.quickOpen"
+  },
+  {
+    "key": "ctrl+j",
+    "command": "workbench.action.terminal.toggleTerminal"
+  },
+  {
+    "key": "ctrl+k",
+    "command": "workbench.action.focusActiveEditorGroup"
+  },
+  {
+    "key": "ctrl+h",
+    "command": "workbench.files.action.focusFilesExplorer",
+    "when": "editorTextFocus"
+  },
+  {
+    "key": "ctrl+h",
+    "command": "workbench.action.focusActiveEditorGroup",
+    "when": "auxiliaryBarFocus"
+  },
+  {
+    "key": "ctrl+l",
+    "command": "workbench.action.focusActiveEditorGroup",
+    "when": "filesExplorerFocus && !inputFocus"
+  },
+  {
+    "key": "ctrl+l",
+    "command": "workbench.action.focusAuxiliaryBar",
+    "when": "!filesExplorerFocus"
+  },
+  {
+    "key": "ctrl+\\",
+    "command": "workbench.action.toggleAuxiliaryBar"
+  },
+  {
+    "key": "enter",
+    "command": "-renameFile",
+    "when": "explorerViewletVisible && filesExplorerFocus && !explorerResourceIsRoot && !explorerResourceIsReadonly && !inputFocus"
+  },
+  {
+    "key": "enter",
+    "command": "list.select",
+    "when": "filesExplorerFocus && !inputFocus"
+  }
+]
+CURSORKEYS
+  fi
+  if [ -f "$CURSOR_USER_DIR/settings.json" ] && ! $OVERWRITE; then
+    log "Settings exist, skipping (use --overwrite)"
+  else
+    backup_file "$CURSOR_USER_DIR/settings.json"
+    mkdir -p "$CURSOR_USER_DIR"
+    cat > "$CURSOR_USER_DIR/settings.json" << 'CURSORSETTINGS'
+{
+    "window.commandCenter": true,
+    "git.openRepositoryInParentFolders": "always"
+}
+CURSORSETTINGS
+  fi
+  log "Installing extensions..."
+  if command -v cursor &>/dev/null; then
+    while IFS= read -r line; do log "$line"; done < <(cursor --install-extension vscodevim.vim 2>&1)
+  else
+    log "Cursor CLI not found, skipping extensions"
   fi
   finish_ok
 fi
