@@ -59,6 +59,7 @@ MODULES=(
   "Node.js LTS"
   "npm global packages"
   "Bun"
+  "Deno"
   "Factory CLI"
   ""
   "Zsh config"
@@ -92,6 +93,7 @@ DESCRIPTIONS=(
   "Install Node.js LTS via nvm"
   "pnpm, pi-coding-agent"
   "Install Bun runtime"
+  "Install Deno runtime"
   "Install Factory CLI"
   "─── Dotfiles & Config ──────────────────────"
   "Write ~/.zshrc with aliases & plugins"
@@ -505,6 +507,14 @@ if is_selected "Bun"; then
   finish_ok
 fi
 
+if is_selected "Deno"; then
+  start_module "Deno"
+  if ! command -v deno &>/dev/null; then
+    while IFS= read -r line; do log "$line"; done < <(curl -fsSL https://deno.land/install.sh | sh 2>&1)
+  fi
+  finish_ok
+fi
+
 if is_selected "Factory CLI"; then
   start_module "Factory CLI"
   while IFS= read -r line; do log "$line"; done < <(curl -fsSL https://app.factory.ai/cli | sh 2>&1)
@@ -535,6 +545,10 @@ alias cc='claude --dangerously-skip-permissions'
 # bun
 export BUN_INSTALL="$HOME/.bun"
 export PATH="$BUN_INSTALL/bin:$PATH"
+
+# deno
+export DENO_INSTALL="$HOME/.deno"
+export PATH="$DENO_INSTALL/bin:$PATH"
 
 # factory cli
 export PATH="$HOME/.local/bin:$PATH"
