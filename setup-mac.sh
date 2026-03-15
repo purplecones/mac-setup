@@ -60,6 +60,7 @@ MODULES=(
   "npm global packages"
   "Bun"
   "Deno"
+  "Expo CLI"
   "Factory CLI"
   ""
   "Zsh config"
@@ -94,6 +95,7 @@ DESCRIPTIONS=(
   "pnpm, pi-coding-agent"
   "Install Bun runtime"
   "Install Deno runtime"
+  "Install Expo CLI (React Native)"
   "Install Factory CLI"
   "─── Dotfiles & Config ──────────────────────"
   "Write ~/.zshrc with aliases & plugins"
@@ -515,6 +517,17 @@ if is_selected "Deno"; then
   finish_ok
 fi
 
+if is_selected "Expo CLI"; then
+  start_module "Expo CLI"
+  if ! command -v expo &>/dev/null && ! npx expo --version &>/dev/null 2>&1; then
+    log "Installing expo-cli globally..."
+    while IFS= read -r line; do log "$line"; done < <(npm install -g expo-cli eas-cli 2>&1)
+  else
+    log "Already installed"
+  fi
+  finish_ok
+fi
+
 if is_selected "Factory CLI"; then
   start_module "Factory CLI"
   while IFS= read -r line; do log "$line"; done < <(curl -fsSL https://app.factory.ai/cli | sh 2>&1)
@@ -874,6 +887,14 @@ SCRIPT
 echo "$(date): Homebrew cleaned" >> ~/.daily-cleanup.log
 SCRIPT
 
+  cat > ~/.local/scripts/upgrade-brew.sh << 'SCRIPT'
+#!/bin/bash
+/opt/homebrew/bin/brew update 2>/dev/null
+/opt/homebrew/bin/brew upgrade 2>/dev/null
+/opt/homebrew/bin/brew upgrade --cask --greedy 2>/dev/null
+echo "$(date): Homebrew upgraded" >> ~/.daily-cleanup.log
+SCRIPT
+
   cat > ~/.local/scripts/cleanup-logs.sh << 'SCRIPT'
 #!/bin/bash
 find ~/Library/Logs -type f -mtime +7 -delete 2>/dev/null
@@ -895,7 +916,7 @@ find ~/Library/Caches -type f -mtime +7 -delete 2>/dev/null
 echo "$(date): Temp/caches cleared" >> ~/.daily-cleanup.log
 SCRIPT
 
-  chmod +x ~/.local/scripts/cleanup-*.sh
+  chmod +x ~/.local/scripts/cleanup-*.sh ~/.local/scripts/upgrade-*.sh
 
   create_cleanup_agent() {
     local name="$1" hour="$2" minute="$3" script="$4"
@@ -933,6 +954,7 @@ LAUNCHD
   create_cleanup_agent "screenshots"   3  0  "$HOME/.local/scripts/cleanup-screenshots.sh"
   create_cleanup_agent "dev-cache"     8  0  "$HOME/.local/scripts/cleanup-dev-cache.sh"
   create_cleanup_agent "brew"         12  0  "$HOME/.local/scripts/cleanup-brew.sh"
+  create_cleanup_agent "brew-upgrade"  9  0  "$HOME/.local/scripts/upgrade-brew.sh"
   create_cleanup_agent "logs"         16  0  "$HOME/.local/scripts/cleanup-logs.sh"
   create_cleanup_agent "browsers"     20  0  "$HOME/.local/scripts/cleanup-browsers.sh"
   create_cleanup_agent "temp"         23  0  "$HOME/.local/scripts/cleanup-temp.sh"
