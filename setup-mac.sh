@@ -1,7 +1,11 @@
 #!/bin/bash
 set -e
+shopt -s extglob
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Ensure TERM is set for tput
+export TERM="${TERM:-xterm-256color}"
 
 # ── Colors & Symbols ──────────────────────────────────────────────
 BOLD='\033[1m'
@@ -53,6 +57,7 @@ MODULES=(
   "Dev apps"
   "Office apps"
   "Other apps"
+  "VibeProxy"
   "Java & Maven (AEM)"
   ""
   "Rosetta & Node 14 (AEM)"
@@ -88,11 +93,12 @@ DESCRIPTIONS=(
   "Claude Code, Codex, Cursor, Docker, iTerm2, Postman"
   "Excel, Outlook, PowerPoint, Teams, Word"
   "1Password, Chrome, Hammerspoon, Raycast, Tailscale"
+  "LLM proxy menu bar app (automazeio/vibeproxy)"
   "OpenJDK 11, Maven 3.6.3"
   "─── Runtimes ────────────────────────────────"
   "Rosetta 2 + Node 14.21.3 x86_64 for AEM"
   "Install Node.js LTS via nvm"
-  "pnpm, pi-coding-agent"
+  "pnpm, opencode, pi-coding-agent"
   "Install Bun runtime"
   "Install Deno runtime"
   "Install Expo CLI (React Native)"
@@ -188,8 +194,8 @@ move_cursor() {
 }
 
 run_picker() {
-  printf '\033[?25l'
-  trap 'printf "\033[?25h"' EXIT
+  tput civis
+  trap 'tput cnorm' EXIT
 
   draw_menu "first"
 
@@ -232,7 +238,7 @@ run_picker() {
     draw_menu "redraw"
   done
 
-  printf '\033[?25h'
+  tput cnorm
   echo ""
 }
 
@@ -274,19 +280,35 @@ is_selected() {
   return 1
 }
 
-# Pre-authenticate sudo so it doesn't interrupt module output
-NEEDS_SUDO=false
-for name in "Xcode" "Java & Maven (AEM)" "Spotlight & Raycast"; do
-  is_selected "$name" && NEEDS_SUDO=true && break
-done
-if $NEEDS_SUDO; then
-  echo -e "  ${DIM}Some modules need admin access.${RESET}"
-  sudo -v
-  # Keep sudo alive in the background
-  while true; do sudo -n true; sleep 50; done 2>/dev/null &
-  SUDO_PID=$!
-  trap 'kill $SUDO_PID 2>/dev/null; printf "\033[?25h"' EXIT
+# Pre-authenticate sudo once — password is reused for all modules
+echo -e "  ${DIM}Authenticating (password used for all modules that need it)...${RESET}"
+read -rsp "  Password: " SUDO_PASS
+echo ""
+# Create a SUDO_ASKPASS helper that echoes the stored password
+ASKPASS_HELPER="$(mktemp)"
+printf '#!/bin/bash\necho "%s"\n' "$SUDO_PASS" > "$ASKPASS_HELPER"
+chmod 700 "$ASKPASS_HELPER"
+export SUDO_ASKPASS="$ASKPASS_HELPER"
+# Validate the password
+if ! sudo -A -v 2>/dev/null; then
+  echo -e "  ${RED}Incorrect password.${RESET}"
+  rm -f "$ASKPASS_HELPER"
+  exit 1
 fi
+# Keep sudo alive in the background
+while true; do sudo -A -n true; sleep 50; done >/dev/null 2>&1 &
+SUDO_PID=$!
+trap 'kill $SUDO_PID 2>/dev/null; wait $SUDO_PID 2>/dev/null; rm -f "$ASKPASS_HELPER"; rm -rf "$_SUDO_WRAPPER_DIR"; tput cnorm 2>/dev/null' EXIT
+unset SUDO_PASS
+
+# Wrapper so child processes (brew cask post-install, etc.) use ASKPASS
+_SUDO_WRAPPER_DIR="$(mktemp -d)"
+cat > "$_SUDO_WRAPPER_DIR/sudo" << 'SUDOWRAP'
+#!/bin/bash
+/usr/bin/sudo -A "$@"
+SUDOWRAP
+chmod +x "$_SUDO_WRAPPER_DIR/sudo"
+export PATH="$_SUDO_WRAPPER_DIR:$PATH"
 
 echo ""
 echo -e "  ${BOLD}Running ${TOTAL} modules...${RESET}"
@@ -298,76 +320,87 @@ LOG_BUFFER=()
 SPIN_IDX=0
 SPIN_CHARS='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
 
+PRINTED_LINES=0  # number of lines on screen for current module (header + log lines)
+
 start_module() {
   CURRENT_MODULE_NAME="$1"
-  STREAM_LINES=0
   LOG_BUFFER=()
   SPIN_IDX=0
+  PRINTED_LINES=1
   printf "  ${CYAN}⠋${RESET} ${BOLD}%s${RESET}\n" "$CURRENT_MODULE_NAME"
 }
 
-# Erase current stream lines + header, then redraw header + last 3 log lines
 _redraw() {
-  # Erase everything (stream lines + header)
-  local total=$((STREAM_LINES + 1))
-  for ((n=0; n<total; n++)); do
-    printf '\033[1A\033[2K'
-  done
+  # Move cursor up to erase all printed lines, clear each
+  if [ "$PRINTED_LINES" -gt 0 ]; then
+    tput cuu "$PRINTED_LINES"
+  fi
+  tput ed
 
   # Advance spinner
   SPIN_IDX=$((SPIN_IDX + 1))
   local ch="${SPIN_CHARS:$((SPIN_IDX % ${#SPIN_CHARS})):1}"
   printf "  ${CYAN}%s${RESET} ${BOLD}%s${RESET}\n" "$ch" "$CURRENT_MODULE_NAME"
 
-  # Print last 3 from buffer
+  # Print last 4 from buffer
   local buf_len=${#LOG_BUFFER[@]}
-  local start=$((buf_len > 3 ? buf_len - 3 : 0))
-  STREAM_LINES=0
+  local start=$((buf_len > 4 ? buf_len - 4 : 0))
   local cols
   cols=$(tput cols 2>/dev/null || echo 80)
   local max=$((cols - 6))
+  PRINTED_LINES=1
   for ((n=start; n<buf_len; n++)); do
     local text="${LOG_BUFFER[$n]}"
     if [ ${#text} -gt $max ]; then
       text="${text:0:$((max - 1))}…"
     fi
     printf "    ${DIM}%s${RESET}\n" "$text"
-    STREAM_LINES=$((STREAM_LINES + 1))
+    PRINTED_LINES=$((PRINTED_LINES + 1))
   done
 }
 
 log() {
   local text="$1"
-  # Strip control chars, skip blank
   text="${text//$'\r'/}"
+  text="${text//$'\x1b'\[*([0-9;])m/}"
   local clean="${text//[$'\t ']/}"
   [[ -z "$clean" ]] && return
+
+  [[ "$text" == *"Warning: Found a likely App Store"* ]] && return
+  [[ "$text" == *"Indexing now, which will not complete"* ]] && return
+  [[ "$text" == *"Disable auto-indexing via"* ]] && return
+  [[ "$text" == *"MAS_NO_AUTO_INDEX"* ]] && return
+  [[ "$text" == *"sometime after mas e"* ]] && return
 
   LOG_BUFFER+=("$text")
   _redraw
 }
 
-# Collapse everything into a single result line
 _collapse() {
   local symbol="$1"
-  local total=$((STREAM_LINES + 1))
-  for ((n=0; n<total; n++)); do
-    printf '\033[1A\033[2K'
-  done
+  if [ "$PRINTED_LINES" -gt 0 ]; then
+    tput cuu "$PRINTED_LINES"
+  fi
+  tput ed
   echo -e "  ${symbol} ${BOLD}${CURRENT_MODULE_NAME}${RESET}"
-  STREAM_LINES=0
+  PRINTED_LINES=0
   LOG_BUFFER=()
 }
 
 finish_ok()   { _collapse "${PASS}"; }
 finish_fail() { _collapse "${FAIL}"; }
 
+# Filter noisy mas/brew output
+_filter_noise() {
+  grep -v -E "Warning: Found a likely App Store|Indexing now, which will not complete|Disable auto-indexing via|sometime after mas|MAS_NO_AUTO_INDEX|Warning: No installed apps found|If this is unexpected|mdimport |# Individual apps|# All apps|# All file system|<LargeAppVolume>|installer\[|PackageKi|IFPKInstall|IFDInstall|Current Path:|Preparing disk|Free space on|Create temporary|Configuring volume|Starting installation|Using authorization|Will use PK session|authorization level|Authorization is being|Administrator authorization|Packages have been authorized|Set authorization level|installer: The upgrade|Standard error:|^\s*$"
+}
+
 # Run brew bundle with streaming output
 brew_bundle() {
   local file="$1"
   while IFS= read -r line; do
     log "$line"
-  done < <(brew bundle --file="$SCRIPT_DIR/brew/$file" --verbose 2>&1)
+  done < <(MAS_NO_AUTO_INDEX=1 brew bundle --file="$SCRIPT_DIR/brew/$file" --verbose 2>&1 | _filter_noise)
 }
 
 # ── Module implementations ────────────────────────────────────────
@@ -390,7 +423,7 @@ if is_selected "Xcode"; then
   else
     log "Installing Xcode from App Store (this may take a while)..."
     if command -v mas &>/dev/null; then
-      while IFS= read -r line; do log "$line"; done < <(mas install 497799835 2>&1)
+      while IFS= read -r line; do log "$line"; done < <(MAS_NO_AUTO_INDEX=1 mas install 497799835 2>&1 | _filter_noise)
     else
       log "mas not found — install CLI tools first, then re-run"
       finish_fail
@@ -398,21 +431,21 @@ if is_selected "Xcode"; then
   fi
   if [ -d "/Applications/Xcode.app" ]; then
     log "Accepting license..."
-    sudo xcodebuild -license accept 2>/dev/null || true
+    sudo -A xcodebuild -license accept 2>/dev/null || true
     log "Setting Xcode as active developer directory..."
-    sudo xcode-select -s /Applications/Xcode.app/Contents/Developer 2>/dev/null || true
+    sudo -A xcode-select -s /Applications/Xcode.app/Contents/Developer 2>/dev/null || true
   fi
   finish_ok
 fi
 
 if is_selected "TestFlight"; then
   start_module "TestFlight"
-  if mas list | grep -q "899247664"; then
+  if MAS_NO_AUTO_INDEX=1 mas list 2>/dev/null | grep -q "899247664"; then
     log "Already installed"
   else
     log "Installing TestFlight from App Store..."
     if command -v mas &>/dev/null; then
-      while IFS= read -r line; do log "$line"; done < <(mas install 899247664 2>&1)
+      while IFS= read -r line; do log "$line"; done < <(MAS_NO_AUTO_INDEX=1 mas install 899247664 2>&1 | _filter_noise)
     else
       log "mas not found — install CLI tools first, then re-run"
       finish_fail
@@ -456,10 +489,38 @@ if is_selected "Other apps"; then
   finish_ok
 fi
 
+if is_selected "VibeProxy"; then
+  start_module "VibeProxy"
+  if [ -d "/Applications/VibeProxy.app" ]; then
+    log "Already installed"
+  else
+    ARCH="$(uname -m)"
+    if [ "$ARCH" = "arm64" ]; then
+      VP_ASSET="VibeProxy-arm64.zip"
+    else
+      VP_ASSET="VibeProxy-x86_64.zip"
+    fi
+    VP_URL="$(curl -fsSL https://api.github.com/repos/automazeio/vibeproxy/releases/latest \
+      | grep "browser_download_url.*${VP_ASSET}\"" | head -1 | cut -d '"' -f 4)"
+    if [ -n "$VP_URL" ]; then
+      log "Downloading ${VP_ASSET}..."
+      VP_TMP="$(mktemp -d)"
+      curl -fsSL -o "$VP_TMP/$VP_ASSET" "$VP_URL"
+      unzip -qo "$VP_TMP/$VP_ASSET" -d "$VP_TMP"
+      cp -R "$VP_TMP/VibeProxy.app" /Applications/
+      rm -rf "$VP_TMP"
+    else
+      log "Could not resolve download URL"
+      finish_fail
+    fi
+  fi
+  finish_ok
+fi
+
 if is_selected "Java & Maven (AEM)"; then
   start_module "Java & Maven (AEM)"
   brew_bundle "java-aem.Brewfile"
-  sudo ln -sfn /opt/homebrew/opt/openjdk@11/libexec/openjdk.jdk /Library/Java/JavaVirtualMachines/openjdk-11.jdk 2>/dev/null || true
+  sudo -A ln -sfn /opt/homebrew/opt/openjdk@11/libexec/openjdk.jdk /Library/Java/JavaVirtualMachines/openjdk-11.jdk 2>/dev/null || true
   # Maven 3.6.3 (newer versions break AEM's AutoValue/bundle-plugin)
   if [ ! -d ~/.local/maven/apache-maven-3.6.3 ]; then
     log "Downloading Maven 3.6.3..."
@@ -496,6 +557,8 @@ if is_selected "npm global packages"; then
   start_module "npm global packages"
   log "Installing pnpm..."
   while IFS= read -r line; do log "$line"; done < <(npm install -g pnpm 2>&1)
+  log "Installing opencode..."
+  while IFS= read -r line; do log "$line"; done < <(npm install -g opencode 2>&1)
   log "Installing pi-coding-agent..."
   while IFS= read -r line; do log "$line"; done < <(npm install -g @mariozechner/pi-coding-agent 2>&1)
   finish_ok
@@ -519,7 +582,7 @@ fi
 
 if is_selected "Expo CLI"; then
   start_module "Expo CLI"
-  if ! command -v expo &>/dev/null && ! npx expo --version &>/dev/null 2>&1; then
+  if ! command -v expo &>/dev/null && ! npm list -g expo-cli &>/dev/null 2>&1; then
     log "Installing expo-cli globally..."
     while IFS= read -r line; do log "$line"; done < <(npm install -g expo-cli eas-cli 2>&1)
   else
@@ -570,6 +633,7 @@ alias b="bun"
 alias c="clear"
 alias g="git"
 alias gs="git status"
+alias gp="git push"
 alias snapai="npx snapai"
 
 # history substring search (type partial command + up/down arrow)
@@ -595,10 +659,12 @@ if is_selected "Starship config"; then
     backup_file ~/.config/starship.toml
     mkdir -p ~/.config
     cat > ~/.config/starship.toml << 'STARSHIP'
-format = "🏕️ "
+format = "$directory"
 
-[character]
-disabled = true
+[directory]
+truncation_length = 1
+truncate_to_repo = false
+format = "$path › "
 STARSHIP
   fi
   finish_ok
@@ -623,6 +689,16 @@ bind -n C-l select-pane -R
 set -g set-clipboard on
 bind -T copy-mode MouseDragEnd1Pane send -X copy-pipe-and-cancel "pbcopy"
 bind -T copy-mode-vi MouseDragEnd1Pane send -X copy-pipe-and-cancel "pbcopy"
+
+# Status bar with gray border line on top
+set -g status 2
+set -g status-format[0] "#[bg=black,fg=colour240]#{p-#{client_width}:─}"
+set -g status-format[1] "#[bg=black,fg=white] #S  #W #[align=right] %H:%M %d-%b "
+set -g status-style "bg=black,fg=white"
+
+# Pane border colors
+set -g pane-border-style fg=grey
+set -g pane-active-border-style fg=green
 TMUXCONF
   fi
   finish_ok
@@ -679,6 +755,33 @@ hs.hotkey.bind({"alt", "cmd"}, "Down", function()
   if win then
     local screen = win:screen():frame()
     win:setFrame(hs.geometry.rect(screen.x, screen.y + screen.h / 2, screen.w, screen.h / 2))
+  end
+end)
+
+-- Ctrl+Command+1: Left third of screen, full height
+hs.hotkey.bind({"ctrl", "cmd"}, "1", function()
+  local win = hs.window.focusedWindow()
+  if win then
+    local screen = win:screen():frame()
+    win:setFrame(hs.geometry.rect(screen.x, screen.y, screen.w / 3, screen.h))
+  end
+end)
+
+-- Ctrl+Command+2: Center third of screen, full height
+hs.hotkey.bind({"ctrl", "cmd"}, "2", function()
+  local win = hs.window.focusedWindow()
+  if win then
+    local screen = win:screen():frame()
+    win:setFrame(hs.geometry.rect(screen.x + screen.w / 3, screen.y, screen.w / 3, screen.h))
+  end
+end)
+
+-- Ctrl+Command+3: Right third of screen, full height
+hs.hotkey.bind({"ctrl", "cmd"}, "3", function()
+  local win = hs.window.focusedWindow()
+  if win then
+    local screen = win:screen():frame()
+    win:setFrame(hs.geometry.rect(screen.x + 2 * screen.w / 3, screen.y, screen.w / 3, screen.h))
   end
 end)
 
@@ -830,7 +933,7 @@ fi
 
 if is_selected "Spotlight & Raycast"; then
   start_module "Spotlight & Raycast"
-  sudo mdutil -a -i off >/dev/null 2>&1
+  sudo -A mdutil -a -i off >/dev/null 2>&1
   defaults write com.apple.symbolichotkeys AppleSymbolicHotKeys -dict-add 64 '{ enabled = 0; value = { parameters = (32, 49, 1048576); type = standard; }; }'
   defaults write com.raycast.macos raycastGlobalHotkey -string "Control-49"
   finish_ok
