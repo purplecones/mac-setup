@@ -712,7 +712,7 @@ if is_selected "Hammerspoon config"; then
     backup_file ~/.hammerspoon/init.lua
     mkdir -p ~/.hammerspoon
     cat > ~/.hammerspoon/init.lua << 'HAMMERSPOON'
-require("hs.ipc")
+pcall(require, "hs.ipc")
 
 -- Option+Command+F: Maximize active window (not fullscreen)
 hs.hotkey.bind({"alt", "cmd"}, "F", function()
