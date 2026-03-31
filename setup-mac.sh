@@ -66,8 +66,10 @@ MODULES=(
   "Bun"
   "Deno"
   "Expo CLI"
+  "LM Studio"
   "Factory CLI"
   ""
+  "Git config"
   "Zsh config"
   "Starship config"
   "Tmux config"
@@ -102,8 +104,10 @@ DESCRIPTIONS=(
   "Install Bun runtime"
   "Install Deno runtime"
   "Install Expo CLI (React Native)"
+  "Install LM Studio"
   "Install Factory CLI"
   "─── Dotfiles & Config ──────────────────────"
+  "Write ~/.gitconfig with conditional includes for Spruce/personal"
   "Write ~/.zshrc with aliases & plugins"
   "Write ~/.config/starship.toml"
   "Write ~/.tmux.conf"
@@ -558,7 +562,7 @@ if is_selected "npm global packages"; then
   log "Installing pnpm..."
   while IFS= read -r line; do log "$line"; done < <(npm install -g pnpm 2>&1)
   log "Installing opencode..."
-  while IFS= read -r line; do log "$line"; done < <(npm install -g opencode 2>&1)
+  while IFS= read -r line; do log "$line"; done < <(npm install -g opencode-ai@latest 2>&1)
   log "Installing pi-coding-agent..."
   while IFS= read -r line; do log "$line"; done < <(npm install -g @mariozechner/pi-coding-agent 2>&1)
   finish_ok
@@ -576,6 +580,16 @@ if is_selected "Deno"; then
   start_module "Deno"
   if ! command -v deno &>/dev/null; then
     while IFS= read -r line; do log "$line"; done < <(curl -fsSL https://deno.land/install.sh | sh 2>&1)
+  fi
+  finish_ok
+fi
+
+if is_selected "LM Studio"; then
+  start_module "LM Studio"
+  if [ ! -d "/Applications/LM Studio.app" ]; then
+    while IFS= read -r line; do log "$line"; done < <(brew install --cask lm-studio 2>&1)
+  else
+    log "Already installed"
   fi
   finish_ok
 fi
@@ -598,6 +612,39 @@ if is_selected "Factory CLI"; then
 fi
 
 # --- Dotfiles & Config ---
+
+if is_selected "Git config"; then
+  start_module "Git config"
+  if [ -f ~/.gitconfig ] && ! $OVERWRITE; then
+    log "Exists, skipping (use --overwrite)"
+  else
+    backup_file ~/.gitconfig
+    backup_file ~/.gitconfig-spruce
+    backup_file ~/.gitconfig-personal
+    cat > ~/.gitconfig << 'GITCONFIG'
+[user]
+	name = Mirza Joldic
+	email = mirza.joldic@gmail.com
+
+[includeIf "gitdir:~/Spruce/"]
+	path = ~/.gitconfig-spruce
+
+[includeIf "gitdir:~/Projects/"]
+	path = ~/.gitconfig-personal
+GITCONFIG
+    cat > ~/.gitconfig-spruce << 'GITCONFIG_SPRUCE'
+[user]
+	name = Mirza Joldic
+	email = mjoldic@sprucetech.com
+GITCONFIG_SPRUCE
+    cat > ~/.gitconfig-personal << 'GITCONFIG_PERSONAL'
+[user]
+	name = Mirza Joldic
+	email = mirza.joldic@gmail.com
+GITCONFIG_PERSONAL
+  fi
+  finish_ok
+fi
 
 if is_selected "Zsh config"; then
   start_module "Zsh config"
@@ -672,6 +719,8 @@ fi
 
 if is_selected "Tmux config"; then
   start_module "Tmux config"
+  mkdir -p "$HOME/.local/bin"
+  ln -sf "$SCRIPT_DIR/tmux-grid" "$HOME/.local/bin/tmux-grid"
   if [ -f ~/.tmux.conf ] && ! $OVERWRITE; then
     log "Exists, skipping (use --overwrite)"
   else
