@@ -65,6 +65,7 @@ MODULES=(
   "npm global packages"
   "Bun"
   "Deno"
+  "Go"
   "Expo CLI"
   "LM Studio"
   "Factory CLI"
@@ -103,6 +104,7 @@ DESCRIPTIONS=(
   "pnpm, opencode, pi-coding-agent"
   "Install Bun runtime"
   "Install Deno runtime"
+  "Install Go programming language"
   "Install Expo CLI (React Native)"
   "Install LM Studio"
   "Install Factory CLI"
@@ -110,7 +112,7 @@ DESCRIPTIONS=(
   "Write ~/.gitconfig with conditional includes for Spruce/personal"
   "Write ~/.zshrc with aliases & plugins"
   "Write ~/.config/starship.toml"
-  "Write ~/.tmux.conf"
+  "Write ~/.tmux.conf and ~/.tmux/tmux-nav"
   "Write ~/.hammerspoon/init.lua"
   "Import iTerm2 plist"
   "Write ~/.claude/settings.json"
@@ -584,6 +586,16 @@ if is_selected "Deno"; then
   finish_ok
 fi
 
+if is_selected "Go"; then
+  start_module "Go"
+  if ! command -v go &>/dev/null; then
+    while IFS= read -r line; do log "$line"; done < <(brew install go 2>&1)
+  else
+    log "Already installed ($(go version))"
+  fi
+  finish_ok
+fi
+
 if is_selected "LM Studio"; then
   start_module "LM Studio"
   if [ ! -d "/Applications/LM Studio.app" ]; then
@@ -721,18 +733,32 @@ if is_selected "Tmux config"; then
   start_module "Tmux config"
   mkdir -p "$HOME/.local/bin"
   ln -sf "$SCRIPT_DIR/tmux-grid" "$HOME/.local/bin/tmux-grid"
-  if [ -f ~/.tmux.conf ] && ! $OVERWRITE; then
-    log "Exists, skipping (use --overwrite)"
-  else
-    backup_file ~/.tmux.conf
-    cat > ~/.tmux.conf << 'TMUXCONF'
-set -g mouse on
 
+  # Write ~/.tmux/tmux-nav (pane navigation customization)
+  mkdir -p "$HOME/.tmux"
+  if [ -f ~/.tmux/tmux-nav ] && ! $OVERWRITE; then
+    log "~/.tmux/tmux-nav exists, skipping (use --overwrite)"
+  else
+    backup_file ~/.tmux/tmux-nav
+    cat > ~/.tmux/tmux-nav << 'TMUXNAV'
 # Vim-style pane switching with Ctrl+hjkl
 bind -n C-h select-pane -L
 bind -n C-j select-pane -D
 bind -n C-k select-pane -U
 bind -n C-l select-pane -R
+TMUXNAV
+    log "Wrote ~/.tmux/tmux-nav"
+  fi
+
+  if [ -f ~/.tmux.conf ] && ! $OVERWRITE; then
+    log "~/.tmux.conf exists, skipping (use --overwrite)"
+  else
+    backup_file ~/.tmux.conf
+    cat > ~/.tmux.conf << 'TMUXCONF'
+set -g mouse on
+
+# Pane navigation customization
+source-file ~/.tmux/tmux-nav
 
 # Copy to system clipboard
 set -g set-clipboard on
@@ -748,6 +774,10 @@ set -g status-style "bg=black,fg=white"
 # Pane border colors
 set -g pane-border-style fg=grey
 set -g pane-active-border-style fg=green
+
+# Dim inactive panes
+set -g window-style 'fg=colour245,bg=default'
+set -g window-active-style 'fg=default,bg=default'
 TMUXCONF
   fi
   finish_ok

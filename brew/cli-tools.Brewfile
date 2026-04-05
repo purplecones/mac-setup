@@ -1,4 +1,6 @@
 brew "flyctl"
+tap "pantheon-systems/external"
+brew "pantheon-systems/external/terminus"
 brew "gh"
 brew "mas"
 brew "nvm"

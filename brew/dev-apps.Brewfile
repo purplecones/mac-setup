@@ -1,6 +1,8 @@
+cask "claude"
 cask "claude-code"
 cask "codex"
 cask "cursor"
+cask "ddev"
 cask "docker-desktop"
 cask "iterm2"
 cask "postman"
