@@ -734,20 +734,15 @@ if is_selected "Tmux config"; then
   mkdir -p "$HOME/.local/bin"
   ln -sf "$SCRIPT_DIR/tmux-grid" "$HOME/.local/bin/tmux-grid"
 
-  # Write ~/.tmux/tmux-nav (pane navigation customization)
+  # Copy tracked pane navigation helpers
+  local tmux_nav_src="$SCRIPT_DIR/tmux-nav"
   mkdir -p "$HOME/.tmux"
   if [ -f ~/.tmux/tmux-nav ] && ! $OVERWRITE; then
     log "~/.tmux/tmux-nav exists, skipping (use --overwrite)"
   else
     backup_file ~/.tmux/tmux-nav
-    cat > ~/.tmux/tmux-nav << 'TMUXNAV'
-# Vim-style pane switching with Ctrl+hjkl
-bind -n C-h select-pane -L
-bind -n C-j select-pane -D
-bind -n C-k select-pane -U
-bind -n C-l select-pane -R
-TMUXNAV
-    log "Wrote ~/.tmux/tmux-nav"
+    cp "$tmux_nav_src" ~/.tmux/tmux-nav
+    log "Copied ~/.tmux/tmux-nav"
   fi
 
   if [ -f ~/.tmux.conf ] && ! $OVERWRITE; then
