@@ -92,8 +92,8 @@ DESCRIPTIONS=(
   "Install TestFlight from App Store"
   "Install Homebrew package manager"
   "─── Packages & Apps ─────────────────────────"
-  "gh, starship, tmux, nvm, wireguard, etc."
-  "Claude Code, Codex, Cursor, Docker, iTerm2, Postman"
+  "btop, gh, php, starship, tmux, nvm, etc."
+  "Claude Code, Codex, Cursor, DDEV, Docker, iTerm2, Postman"
   "Excel, Outlook, PowerPoint, Teams, Word"
   "1Password, Chrome, Hammerspoon, Raycast, Tailscale"
   "LLM proxy menu bar app (automazeio/vibeproxy)"
@@ -101,7 +101,7 @@ DESCRIPTIONS=(
   "─── Runtimes ────────────────────────────────"
   "Rosetta 2 + Node 14.21.3 x86_64 for AEM"
   "Install Node.js LTS via nvm"
-  "pnpm, opencode, pi-coding-agent"
+  "pnpm, opencode, pi-coding-agent, codex"
   "Install Bun runtime"
   "Install Deno runtime"
   "Install Go programming language"
@@ -119,7 +119,7 @@ DESCRIPTIONS=(
   "Keybindings, settings, and extensions"
   "─── System ─────────────────────────────────"
   "Disable Spotlight, configure Raycast"
-  "Dock, keyboard, Finder, wallpaper, dark mode"
+  "Dock, keyboard (all keyboards), Finder, wallpaper, dark mode"
   "Screenshot folder & settings"
   "Daily cleanup LaunchAgents"
 )
@@ -567,6 +567,8 @@ if is_selected "npm global packages"; then
   while IFS= read -r line; do log "$line"; done < <(npm install -g opencode-ai@latest 2>&1)
   log "Installing pi-coding-agent..."
   while IFS= read -r line; do log "$line"; done < <(npm install -g @mariozechner/pi-coding-agent 2>&1)
+  log "Installing codex..."
+  while IFS= read -r line; do log "$line"; done < <(npm install -g @openai/codex 2>&1)
   finish_ok
 fi
 
@@ -680,6 +682,7 @@ alias cc='claude --dangerously-skip-permissions'
 # bun
 export BUN_INSTALL="$HOME/.bun"
 export PATH="$BUN_INSTALL/bin:$PATH"
+[ -s "$HOME/.bun/_bun" ] && source "$HOME/.bun/_bun"
 
 # deno
 export DENO_INSTALL="$HOME/.deno"
@@ -687,6 +690,15 @@ export PATH="$DENO_INSTALL/bin:$PATH"
 
 # factory cli
 export PATH="$HOME/.local/bin:$PATH"
+
+# mlx-lm (local AI models)
+export PATH="$HOME/Library/Python/3.9/bin:$PATH"
+
+# lm studio cli
+export PATH="$PATH:$HOME/.lmstudio/bin"
+
+# codex
+export CODEX_REAL_BIN="${CODEX_REAL_BIN:-$NVM_BIN/codex}"
 
 alias b="bun"
 alias c="clear"
@@ -745,6 +757,12 @@ if is_selected "Tmux config"; then
     log "Copied ~/.tmux/tmux-nav"
   fi
 
+  # Install TPM (Tmux Plugin Manager)
+  if [ ! -d "$HOME/.tmux/plugins/tpm" ]; then
+    log "Installing TPM..."
+    while IFS= read -r line; do log "$line"; done < <(git clone https://github.com/tmux-plugins/tpm "$HOME/.tmux/plugins/tpm" 2>&1)
+  fi
+
   if [ -f ~/.tmux.conf ] && ! $OVERWRITE; then
     log "~/.tmux.conf exists, skipping (use --overwrite)"
   else
@@ -752,8 +770,18 @@ if is_selected "Tmux config"; then
     cat > ~/.tmux.conf << 'TMUXCONF'
 set -g mouse on
 
-# Pane navigation customization
-source-file ~/.tmux/tmux-nav
+# Plugins (TPM)
+set -g @plugin 'tmux-plugins/tpm'
+set -g @plugin 'purplecones/tmux-tap'
+set -g @tap_adapters "claude_code codex opencode"
+set -g @tap_on_agent_done "afplay /System/Library/Sounds/Ping.aiff"
+set -g @plugin 'purplecones/tmux-nav'
+
+# Vim-style pane switching with Ctrl+hjkl
+bind -n C-h if-shell "[ #{pane_at_left} -eq 0 ]" "select-pane -L"
+bind -n C-j if-shell "[ #{pane_at_bottom} -eq 0 ]" "select-pane -D"
+bind -n C-k if-shell "[ #{pane_at_top} -eq 0 ]" "select-pane -U"
+bind -n C-l if-shell "[ #{pane_at_right} -eq 0 ]" "select-pane -R"
 
 # Copy to system clipboard
 set -g set-clipboard on
@@ -766,15 +794,19 @@ set -g status-format[0] "#[bg=black,fg=colour240]#{p-#{client_width}:─}"
 set -g status-format[1] "#[bg=black,fg=white] #S  #W #[align=right] %H:%M %d-%b "
 set -g status-style "bg=black,fg=white"
 
-# Pane border colors
-set -g pane-border-style fg=grey
-set -g pane-active-border-style fg=green
-
 # Dim inactive panes
-set -g window-style 'fg=colour245,bg=default'
-set -g window-active-style 'fg=default,bg=default'
+set -g window-style 'fg=colour244,bg=colour234'
+set -g window-active-style 'fg=colour250,bg=#000000'
+
+# Initialize TPM (must be last line)
+run '~/.tmux/plugins/tpm/tpm'
 TMUXCONF
   fi
+
+  # Install plugins via TPM
+  log "Installing tmux plugins..."
+  while IFS= read -r line; do log "$line"; done < <("$HOME/.tmux/plugins/tpm/bin/install_plugins" 2>&1)
+
   finish_ok
 fi
 
@@ -874,6 +906,19 @@ hs.hotkey.bind({"ctrl", "alt", "cmd"}, "Left", function() moveToScreen("toWest")
 hs.hotkey.bind({"ctrl", "alt", "cmd"}, "Right", function() moveToScreen("toEast") end)
 hs.hotkey.bind({"ctrl", "alt", "cmd"}, "Up", function() moveToScreen("toNorth") end)
 hs.hotkey.bind({"ctrl", "alt", "cmd"}, "Down", function() moveToScreen("toSouth") end)
+
+-- Auto-copy new screenshots to clipboard
+local screenshotDir = os.getenv("HOME") .. "/Screenshots"
+screenshotWatcher = hs.pathwatcher.new(screenshotDir, function(paths)
+  for _, path in ipairs(paths) do
+    if path:match("%.png$") then
+      hs.timer.doAfter(1.0, function()
+        local escaped = path:gsub('"', '\\"')
+        hs.execute('osascript -e \'set the clipboard to (read (POSIX file "' .. escaped .. '") as «class PNGf»)\'')
+      end)
+    end
+  end
+end):start()
 HAMMERSPOON
   fi
   finish_ok
@@ -904,19 +949,61 @@ if is_selected "Claude Code settings"; then
     cat > ~/.claude/settings.json << CLAUDESETTINGS
 {
   "hooks": {
-    "PreToolUse": [
+    "UserPromptSubmit": [
       {
-        "matcher": "Bash",
+        "matcher": "",
         "hooks": [
           {
             "type": "command",
-            "command": "$HOME/.claude/hooks/rtk-rewrite.sh"
+            "command": "[ -n \"\$TMUX_PANE\" ] && tmux set-option -p -t \"\$TMUX_PANE\" @tap_state running 2>/dev/null; true"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -n \"\$TMUX_PANE\" ] && tmux set-option -p -t \"\$TMUX_PANE\" @tap_state asking 2>/dev/null; true"
+          }
+        ]
+      },
+      {
+        "matcher": "ExitPlanMode",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -n \"\$TMUX_PANE\" ] && tmux set-option -p -t \"\$TMUX_PANE\" @tap_state plan_ready 2>/dev/null; true"
+          }
+        ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -n \"\$TMUX_PANE\" ] && tmux set-option -p -t \"\$TMUX_PANE\" @tap_state running 2>/dev/null; true"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.tmux-tap/hooks/tap-stop.sh"
           }
         ]
       }
     ]
   },
-  "skipDangerousModePermissionPrompt": true
+  "voiceEnabled": true,
+  "skipDangerousModePermissionPrompt": true,
+  "model": "opus[1m]"
 }
 CLAUDESETTINGS
   fi
@@ -990,13 +1077,18 @@ CURSORKEYS
     cat > "$CURSOR_USER_DIR/settings.json" << 'CURSORSETTINGS'
 {
     "window.commandCenter": true,
-    "git.openRepositoryInParentFolders": "always"
+    "git.openRepositoryInParentFolders": "always",
+    "claudeCode.allowDangerouslySkipPermissions": true,
+    "claudeCode.hideOnboarding": true,
+    "claudeCode.useTerminal": true
 }
 CURSORSETTINGS
   fi
   log "Installing extensions..."
   if command -v cursor &>/dev/null; then
     while IFS= read -r line; do log "$line"; done < <(cursor --install-extension vscodevim.vim 2>&1)
+    while IFS= read -r line; do log "$line"; done < <(cursor --install-extension anthropic.claude-code 2>&1)
+    while IFS= read -r line; do log "$line"; done < <(cursor --install-extension eamodio.gitlens 2>&1)
   else
     log "Cursor CLI not found, skipping extensions"
   fi
@@ -1021,8 +1113,31 @@ if is_selected "macOS defaults"; then
   defaults write -g KeyRepeat -int 2
   defaults write NSGlobalDomain AppleShowAllExtensions -bool true
   killall Finder 2>/dev/null || true
-  defaults -currentHost write -g com.apple.keyboard.modifiermapping.0-0-0 -array \
-    '<dict><key>HIDKeyboardModifierMappingSrc</key><integer>30064771129</integer><key>HIDKeyboardModifierMappingDst</key><integer>30064771300</integer></dict>'
+  # Caps Lock → Right Command on ALL keyboards (built-in + external)
+  # hidutil applies globally; the LaunchAgent persists it across reboots
+  hidutil property --set '{"UserKeyMapping":[{"HIDKeyboardModifierMappingSrc":0x700000039,"HIDKeyboardModifierMappingDst":0x7000000E4}]}' >/dev/null 2>&1
+  mkdir -p ~/Library/LaunchAgents
+  cat > ~/Library/LaunchAgents/com.local.keyboard-remap.plist << 'LAUNCHAGENT'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.local.keyboard-remap</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/hidutil</string>
+    <string>property</string>
+    <string>--set</string>
+    <string>{"UserKeyMapping":[{"HIDKeyboardModifierMappingSrc":0x700000039,"HIDKeyboardModifierMappingDst":0x7000000E4}]}</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+</dict>
+</plist>
+LAUNCHAGENT
+  launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.local.keyboard-remap.plist 2>/dev/null || true
+  launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.local.keyboard-remap.plist
   osascript -e 'tell application "System Events" to tell every desktop to set picture to "/System/Library/Desktop Pictures/Solid Colors/Black.png"' 2>/dev/null || true
   defaults write com.apple.WindowManager EnableStandardClickToShowDesktop -bool false
   defaults write com.apple.WindowManager StandardHideDesktopIcons -bool true
